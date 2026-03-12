@@ -113,7 +113,7 @@ public class ReviewQueueController : ControllerBase
     [HttpPut("{itemId:int}")]
     public async Task<ActionResult<ReviewItemDto>> UpdateItem(int itemId, UpdateItemRequest request)
     {
-        if (request.Priority < 1 || request.Priority > 5)
+        if (request.Priority.HasValue && (request.Priority.Value < 1 || request.Priority.Value > 5))
             return BadRequest("Priority must be between 1 and 5.");
 
         var updateItemByIdForOfficerQuery =
@@ -129,8 +129,11 @@ public class ReviewQueueController : ControllerBase
         if (item == null)
             return NotFound();
 
-        item.Priority = request.Priority;
-        item.Notes = request.Notes;
+        if (request.Priority.HasValue)
+            item.Priority = request.Priority.Value;
+
+        if (request.Notes is not null)
+            item.Notes = request.Notes;
 
         var updateQueueTimestampByIdQuery =
             from queueForTimestampUpdateEntity in _context.ReviewQueues

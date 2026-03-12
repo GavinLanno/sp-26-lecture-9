@@ -8,7 +8,7 @@ public record AddToQueueRequest
 
 public record UpdateItemRequest
 {
-    public int Priority { get; init; }
+    public int? Priority { get; init; }
     public string? Notes { get; init; }
 }
 
