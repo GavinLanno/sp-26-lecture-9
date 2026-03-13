@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using Buckeye.Lending.Api.Models;
-using System.Runtime.CompilerServices;
 using Buckeye.Lending.Api.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -66,16 +65,21 @@ public class LoanApplicationsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<LoanApplicationDto>> Create(LoanApplicationDto application)
     {
-        // Validate
-        if (string.IsNullOrWhiteSpace(application.ApplicantName))
-            throw new ArgumentException("Applicant name is required", nameof(application.ApplicantName));
+        var applicant = await _context.Applicants.FindAsync(application.ApplicantId);
+        if (applicant == null)
+            throw new ArgumentException($"Applicant {application.ApplicantId} not found.", nameof(application.ApplicantId));
 
-        if (application.LoanAmount <= 0)
-            throw new ArgumentException("Loan amount must be positive", nameof(application.LoanAmount));
+        var loanType = await _context.LoanTypes.FindAsync(application.LoanTypeId);
+        if (loanType == null)
+            throw new ArgumentException($"Loan type {application.LoanTypeId} not found.", nameof(application.LoanTypeId));
 
         // Set server-controlled fields
+        application.ApplicantName = applicant.Name;
+        application.RiskRating = CalculateRiskRating(application.LoanAmount, application.AnnualIncome);
         application.Status = "Pending Review";
-        application.SubmittedDate = DateTime.Now;
+        application.SubmittedDate = DateTime.UtcNow;
+        application.Applicant = null;
+        application.LoanType = null;
 
         _context.LoanApplications.Add(application);
         await _context.SaveChangesAsync();
@@ -95,17 +99,18 @@ public class LoanApplicationsController : ControllerBase
         if (existing == null)
             throw new KeyNotFoundException($"Loan application with ID {id} not found");
 
-        // Validate
-        if (string.IsNullOrWhiteSpace(updated.ApplicantName))
-            throw new ArgumentException("Applicant name is required", nameof(updated.ApplicantName));
+        var applicant = await _context.Applicants.FindAsync(updated.ApplicantId);
+        if (applicant == null)
+            throw new ArgumentException($"Applicant {updated.ApplicantId} not found.", nameof(updated.ApplicantId));
 
-        if (updated.LoanAmount <= 0)
-            throw new ArgumentException("Loan amount must be positive", nameof(updated.LoanAmount));
+        var loanType = await _context.LoanTypes.FindAsync(updated.LoanTypeId);
+        if (loanType == null)
+            throw new ArgumentException($"Loan type {updated.LoanTypeId} not found.", nameof(updated.LoanTypeId));
 
         // Update allowed fields
-        existing.ApplicantName = updated.ApplicantName;
+        existing.ApplicantName = applicant.Name;
         existing.LoanAmount = updated.LoanAmount;
-        existing.LoanType = updated.LoanType;
+        existing.RiskRating = CalculateRiskRating(updated.LoanAmount, updated.AnnualIncome);
         existing.AnnualIncome = updated.AnnualIncome;
         existing.ApplicantId = updated.ApplicantId;
         existing.LoanTypeId = updated.LoanTypeId;
@@ -123,8 +128,31 @@ public class LoanApplicationsController : ControllerBase
         if (app == null)
             throw new KeyNotFoundException($"Loan application with ID {id} not found");
 
+        var isReferencedInQueue = await _context.ReviewItems.AnyAsync(reviewItemEntity => reviewItemEntity.LoanApplicationId == id);
+        if (isReferencedInQueue)
+            throw new InvalidOperationException($"Loan application {id} cannot be deleted while it is referenced in a review queue.");
+
         _context.LoanApplications.Remove(app);
         await _context.SaveChangesAsync();
         return NoContent();  // 204
+    }
+
+    private static int CalculateRiskRating(decimal loanAmount, decimal annualIncome)
+    {
+        if (annualIncome <= 0)
+            return 5;
+
+        var debtToIncomeRatio = loanAmount / annualIncome;
+
+        if (debtToIncomeRatio <= 0.75m)
+            return 1;
+        if (debtToIncomeRatio <= 1.50m)
+            return 2;
+        if (debtToIncomeRatio <= 2.50m)
+            return 3;
+        if (debtToIncomeRatio <= 3.50m)
+            return 4;
+
+        return 5;
     }
 }

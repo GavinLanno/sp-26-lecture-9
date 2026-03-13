@@ -42,9 +42,6 @@ public class ReviewQueueController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<ReviewItemDto>> AddToQueue(AddToQueueRequest request)
     {
-        if (request.Priority < 1 || request.Priority > 5)
-            return BadRequest("Priority must be between 1 and 5.");
-
         var loanApplicationByIdQuery =
             from loanApplicationEntity in _context.LoanApplications
             where loanApplicationEntity.Id == request.LoanApplicationId
@@ -54,25 +51,7 @@ public class ReviewQueueController : ControllerBase
         if (loanApplication == null)
             return BadRequest($"Loan application {request.LoanApplicationId} not found.");
 
-        var addQueueByOfficerQuery =
-            from reviewQueueForAddEntity in _context.ReviewQueues
-            where reviewQueueForAddEntity.OfficerId == CurrentOfficerId
-            select reviewQueueForAddEntity;
-
-        var queue = await addQueueByOfficerQuery
-            .Include(q => q.Items)
-            .FirstOrDefaultAsync();
-
-        if (queue == null)
-        {
-            queue = new ReviewQueue
-            {
-                OfficerId = CurrentOfficerId,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-            _context.ReviewQueues.Add(queue);
-        }
+        var queue = await GetOrCreateQueueAsync();
 
         var existingItem = (
             from queuedItemEntity in queue.Items
@@ -95,7 +74,46 @@ public class ReviewQueueController : ControllerBase
             queue.UpdatedAt = DateTime.UtcNow;
         }
 
-        await _context.SaveChangesAsync();
+        try
+        {
+            await _context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _context.ChangeTracker.Clear();
+
+            var reloadQueueByOfficerQuery =
+                from reviewQueueForReloadEntity in _context.ReviewQueues
+                where reviewQueueForReloadEntity.OfficerId == CurrentOfficerId
+                select reviewQueueForReloadEntity;
+
+            var reloadedQueue = await reloadQueueByOfficerQuery
+                .Include(q => q.Items)
+                .FirstAsync();
+
+            var reloadedItem = (
+                from queuedItemEntity in reloadedQueue.Items
+                where queuedItemEntity.LoanApplicationId == request.LoanApplicationId
+                select queuedItemEntity
+            ).FirstOrDefault();
+
+            if (reloadedItem == null)
+            {
+                reloadedQueue.Items.Add(new ReviewItem
+                {
+                    LoanApplicationId = request.LoanApplicationId,
+                    Priority = request.Priority
+                });
+            }
+            else
+            {
+                reloadedItem.Priority = request.Priority;
+            }
+
+            reloadedQueue.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+            queue = reloadedQueue;
+        }
 
         var savedItemByQueueAndLoanAppQuery =
             from savedReviewItemEntity in _context.ReviewItems
@@ -113,9 +131,6 @@ public class ReviewQueueController : ControllerBase
     [HttpPut("{itemId:int}")]
     public async Task<ActionResult<ReviewItemDto>> UpdateItem(int itemId, UpdateItemRequest request)
     {
-        if (request.Priority.HasValue && (request.Priority.Value < 1 || request.Priority.Value > 5))
-            return BadRequest("Priority must be between 1 and 5.");
-
         var updateItemByIdForOfficerQuery =
             from reviewItemToUpdateEntity in _context.ReviewItems
             join reviewQueueForUpdateEntity in _context.ReviewQueues on reviewItemToUpdateEntity.QueueId equals reviewQueueForUpdateEntity.Id
@@ -216,6 +231,24 @@ public class ReviewQueueController : ControllerBase
 
     private static ReviewItemDto MapItem(ReviewItem item)
     {
+        var loanApplicationSummary = item.LoanApplication == null
+            ? new LoanApplicationSummaryDto
+            {
+                Id = item.LoanApplicationId,
+                ApplicantName = "Loan no longer available",
+                LoanAmount = 0m,
+                Status = "Archived",
+                RiskRating = 0
+            }
+            : new LoanApplicationSummaryDto
+            {
+                Id = item.LoanApplication.Id,
+                ApplicantName = item.LoanApplication.ApplicantName,
+                LoanAmount = item.LoanApplication.LoanAmount,
+                Status = item.LoanApplication.Status,
+                RiskRating = item.LoanApplication.RiskRating
+            };
+
         return new ReviewItemDto
         {
             Id = item.Id,
@@ -223,16 +256,50 @@ public class ReviewQueueController : ControllerBase
             LoanApplicationId = item.LoanApplicationId,
             Priority = item.Priority,
             Notes = item.Notes,
-            LoanApplication = item.LoanApplication == null
-                ? null
-                : new LoanApplicationSummaryDto
-                {
-                    Id = item.LoanApplication.Id,
-                    ApplicantName = item.LoanApplication.ApplicantName,
-                    LoanAmount = item.LoanApplication.LoanAmount,
-                    Status = item.LoanApplication.Status,
-                    RiskRating = item.LoanApplication.RiskRating
-                }
+            LoanApplication = loanApplicationSummary
         };
+    }
+
+    private async Task<ReviewQueue> GetOrCreateQueueAsync()
+    {
+        var queueByOfficerQuery =
+            from reviewQueueEntity in _context.ReviewQueues
+            where reviewQueueEntity.OfficerId == CurrentOfficerId
+            select reviewQueueEntity;
+
+        var queue = await queueByOfficerQuery
+            .Include(q => q.Items)
+            .FirstOrDefaultAsync();
+
+        if (queue != null)
+            return queue;
+
+        queue = new ReviewQueue
+        {
+            OfficerId = CurrentOfficerId,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        _context.ReviewQueues.Add(queue);
+
+        try
+        {
+            await _context.SaveChangesAsync();
+            return queue;
+        }
+        catch (DbUpdateException)
+        {
+            _context.Entry(queue).State = EntityState.Detached;
+
+            var existingQueueByOfficerQuery =
+                from reviewQueueEntity in _context.ReviewQueues
+                where reviewQueueEntity.OfficerId == CurrentOfficerId
+                select reviewQueueEntity;
+
+            return await existingQueueByOfficerQuery
+                .Include(q => q.Items)
+                .FirstAsync();
+        }
     }
 }

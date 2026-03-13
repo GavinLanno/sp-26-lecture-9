@@ -1,14 +1,22 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Buckeye.Lending.Api.Dtos;
 
 public record AddToQueueRequest
 {
+    [Range(1, int.MaxValue)]
     public int LoanApplicationId { get; init; }
+
+    [Range(1, 5)]
     public int Priority { get; init; } = 3;
 }
 
 public record UpdateItemRequest
 {
+    [Range(1, 5)]
     public int? Priority { get; init; }
+
+    [MaxLength(500)]
     public string? Notes { get; init; }
 }
 

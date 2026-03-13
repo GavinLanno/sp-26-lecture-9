@@ -18,6 +18,26 @@ public class LendingContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<ReviewQueue>()
+            .HasIndex(queueEntity => queueEntity.OfficerId)
+            .IsUnique();
+
+        modelBuilder.Entity<ReviewItem>()
+            .HasIndex(reviewItemEntity => new { reviewItemEntity.QueueId, reviewItemEntity.LoanApplicationId })
+            .IsUnique();
+
+        modelBuilder.Entity<ReviewItem>()
+            .HasOne(reviewItemEntity => reviewItemEntity.Queue)
+            .WithMany(reviewQueueEntity => reviewQueueEntity.Items)
+            .HasForeignKey(reviewItemEntity => reviewItemEntity.QueueId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ReviewItem>()
+            .HasOne(reviewItemEntity => reviewItemEntity.LoanApplication)
+            .WithMany()
+            .HasForeignKey(reviewItemEntity => reviewItemEntity.LoanApplicationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         // Seed Applicants
         modelBuilder.Entity<Applicant>().HasData(
             new Applicant { Id = 1, Name = "Sarah Johnson", Email = "sarah.johnson@email.com", Phone = "614-555-0101", CreatedDate = new DateTime(2026, 1, 10, 0, 0, 0, DateTimeKind.Utc) },
